@@ -1,0 +1,7 @@
+---
+repo_url: "git@github.com:rahulremesan/sent-message.git"
+repo_dest: "/home/ubuntu/bizom/"
+repo_branch: "main"  
+docker_image_name: "ekalavya-image"
+docker_container_name: "ekalavya"
+docker_run_command: "docker run -d -p 8080:8080 --name {{ docker_container_name }} {{ docker_image_name }}:latest"

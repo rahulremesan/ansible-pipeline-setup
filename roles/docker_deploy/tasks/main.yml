@@ -1,0 +1,85 @@
+---
+- name: Clear clone directory
+  file:
+    path: "{{ repo_dest }}"
+    state: absent
+  become: yes  # Use become: yes when you need sudo privileges
+
+- name: Clone repository and checkout branch
+  git:
+    repo: "{{ repo_url }}"  # Use SSH URL, like git@github.com:username/repo.git
+    dest: "{{ repo_dest }}"
+    version: "{{ repo_branch }}"
+    force: yes
+- name: Check if container is running
+  docker_container_info:
+    name: "{{ docker_container_name }}"
+  register: container_info
+
+- name: Stop running container
+  docker_container:
+    name: "{{ docker_container_name }}"
+    state: stopped
+  when: container_info.exists
+
+- name: Remove container
+  docker_container:
+    name: "{{ docker_container_name }}"
+    state: absent
+  when: container_info.exists
+
+- name: Check if Docker image exists
+  command: docker image inspect {{ docker_image_name }}:latest
+  register: image_check
+  ignore_errors: yes
+
+- name: Rename existing image with backup tag
+  command: docker tag {{ docker_image_name }}:latest {{ docker_image_name }}:backup
+  when: image_check.rc == 0
+
+- name: Build new Docker image
+  docker_image:
+    name: "{{ docker_image_name }}"
+    build:
+      path: "{{ repo_dest }}"
+    source: build
+    force_source: yes
+    tag: latest
+  register: build_result
+
+- name: Run new Docker container
+  docker_container:
+    name: "{{ docker_container_name }}"
+    image: "{{ docker_image_name }}:latest"
+    state: started
+  register: run_result
+  when: build_result is succeeded
+
+- name: Create backup tar of the previous image
+  command: docker save {{ docker_image_name }}:backup -o {{ repo_dest }}/{{ docker_image_name }}_backup.tar
+  when: image_check.rc == 0
+
+- name: Revert changes on failure
+  block:
+    - name: Remove new image
+      docker_image:
+        name: "{{ docker_image_name }}:latest"
+        state: absent
+
+    - name: Rename 'backup' image back to 'latest'
+      command: docker tag {{ docker_image_name }}:backup {{ docker_image_name }}:latest
+      when: image_check.rc == 0
+
+    - name: Remove 'backup' tag
+      docker_image:
+        name: "{{ docker_image_name }}:backup"
+        state: absent
+      when: image_check.rc == 0
+
+    - name: Restart original container
+      docker_container:
+        name: "{{ docker_container_name }}"
+        image: "{{ docker_image_name }}:latest"
+        state: started
+      when: image_check.rc == 0
+  when: build_result is failed or run_result is failed
